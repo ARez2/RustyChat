@@ -5,7 +5,7 @@ use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use networking::{Shared, Peer, User, DEFAULT_ADDR, Chat, Codec, Message, MessageType, UserSetupType};
+use rusty_chat::{Shared, Peer, User, DEFAULT_ADDR, Chat, Codec, Message, MessageType, UserSetupType};
 
 const SYSTEM_USRNAME : &str= "SYSTEM";
 

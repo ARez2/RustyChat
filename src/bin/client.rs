@@ -21,7 +21,7 @@ use tui::{
     Frame, Terminal,
 };
 
-use networking::{DEFAULT_ADDR, Message, MessageType, UserSetupType};
+use rusty_chat::{DEFAULT_ADDR, Message, MessageType, UserSetupType};
 
 
 struct App {
