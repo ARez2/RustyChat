@@ -1,7 +1,10 @@
 use std::io;
 use std::{collections::HashMap, net::SocketAddr};
 use std::sync::Arc;
+use futures::SinkExt;
+use serde_derive::{Serialize, Deserialize};
 use tokio::{sync::{mpsc, Mutex}, net::TcpStream};
+use tokio_stream::StreamExt;
 use tokio_util::codec::{Framed, LinesCodec};
 
 
@@ -60,25 +63,32 @@ impl Shared {
     }
 
 
-    pub async fn broadcast(&mut self, sender: SocketAddr, message: &str, custom_sender_msg: &str) {
+    pub async fn broadcast(&mut self, sender: SocketAddr, message: &Message, custom_sender_msg: &Message, codec: &mut Codec) {
         let user_chats = self.get_chats_from_user_addr(sender).clone();
         for chat in user_chats {
             for peer in self.peers.iter() {
                 // peer is part of the currently afftected chat
                 if chat.members.contains(&peer.0.addr) {
                     // This is the sender, so send him a custom message
-                    if custom_sender_msg.len() > 0 && peer.0.addr == sender {
-                        let _ = peer.1.send(custom_sender_msg.into());
+                    if custom_sender_msg.text.len() > 0 && peer.0.addr == sender {
+                        let send : String = custom_sender_msg.into();
+                        if send.len() > 0 {
+                            let _ = peer.1.send(send);
+                        }
+                        //codec.send_message(custom_sender_msg).await;
                     // Not the sender
                     } else if peer.0.addr != sender {
-                        let _ = peer.1.send(message.into());
+                        let send : String = message.into();
+                        if send.len() > 0 {
+                            let _ = peer.1.send(send);
+                        }
+                        //codec.send_message(message).await;
                     }
                 }
             }
         }
 
     }
-
 
     pub fn join_chat(&mut self, joining_user: &User, joined_user: &String) {
         let other_user = self.get_usr_from_name(joined_user.clone());
@@ -136,15 +146,90 @@ impl Shared {
 
 
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+pub enum UserSetupType {
+    UsernameConfirmed,
+}
+
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+pub enum MessageType {
+    SystemInfo,
+    UserSetup(UserSetupType),
+    User,
+    Command,
+}
+
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Message {
+    pub text: String,
+    pub msg_type: MessageType,
+    pub author: String,
+}
+
+impl Message {
+    pub fn new() -> Message {
+        Message {
+            text: String::new(),
+            msg_type: MessageType::User,
+            author: String::new(),
+        }
+    }
+}
+
+impl Into<std::string::String> for Message {
+    fn into(self) -> std::string::String {
+        serde_json::to_string(&self).unwrap()
+    }
+}
+impl Into<std::string::String> for &Message {
+    fn into(self) -> std::string::String {
+        serde_json::to_string(self).unwrap()
+    }
+}
+impl std::fmt::Display for Message {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.author, self.text)
+    }
+}
+impl Into<Message> for String {
+    fn into(self) -> Message {
+        serde_json::from_str(self.as_str()).unwrap()
+    }
+}
+
+pub struct Codec {
+    lines: Framed<TcpStream, LinesCodec>,
+}
+
+impl Codec {
+    pub fn new(stream: TcpStream) -> Codec {
+        Codec {
+            lines: Framed::new(stream, LinesCodec::new()),
+        }
+    }
+
+    pub async fn send_message(&mut self, message: &Message) {
+        let serialized: String = message.into();
+        self.lines.send(serialized).await.unwrap();
+    }
+
+    pub async fn next(&mut self) -> Option<Result<String, tokio_util::codec::LinesCodecError>> {
+        self.lines.next().await
+    }
+}
+
+
 pub struct Peer {
-    pub lines: Framed<TcpStream, LinesCodec>,
+    pub codec: Codec,
     pub reciever: Reciever,
 }
 
 impl Peer {
     pub async fn new(
         state: Arc<Mutex<Shared>>,
-        lines: Framed<TcpStream, LinesCodec>,
+        codec: Codec,
         user: &User,
     ) -> io::Result<Peer> {
         let (transmitter, reciever) = mpsc::unbounded_channel();
@@ -153,7 +238,7 @@ impl Peer {
         std::mem::drop(guard);
 
         Ok(Peer {
-            lines,
+            codec,
             reciever,
         })
     }

@@ -1,15 +1,13 @@
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex};
-use tokio_stream::StreamExt;
-use tokio_util::codec::{Framed, LinesCodec};
 
-use futures::SinkExt;
 use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use networking::{Shared, Peer, User, DEFAULT_ADDR, Chat};
+use networking::{Shared, Peer, User, DEFAULT_ADDR, Chat, Codec, Message, MessageType, UserSetupType};
 
+const SYSTEM_USRNAME : &str= "SYSTEM";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -36,13 +34,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
 async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, peer_addr: SocketAddr,) 
     -> Result<(), Box<dyn Error>> 
 {
-    let mut lines = Framed::new(stream, LinesCodec::new());
+    let mut codec = Codec::new(stream);
 
     let mut username = String::new();
-    request_user_input("Please enter your username:", &mut lines, &mut username).await?;
+    request_user_input("Please enter your username:", &mut codec, &mut username).await?;
+    codec.send_message(&Message {
+        text: username.clone(),
+        msg_type: MessageType::UserSetup(UserSetupType::UsernameConfirmed),
+        author: String::from(SYSTEM_USRNAME),
+    }).await;
     
     let mut friend_username = String::new();
-    request_user_input("Please enter your friends name:", &mut lines, &mut friend_username).await?;
+    request_user_input("Please enter your friends name:", &mut codec, &mut friend_username).await?;
     
     let user = User {
         addr: peer_addr,
@@ -50,34 +53,43 @@ async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, peer_addr: Socket
     };
 
     // Register our peer with state which internally sets up some channels.
-    let mut peer = Peer::new(state.clone(), lines, &user).await?;
+    let mut peer = Peer::new(state.clone(), codec, &user).await?;
     
     let mut new_state = state.lock().await;
     new_state.join_chat(&user, &friend_username);
     std::mem::drop(new_state);
     
     let mut state_lock = state.lock().await;
-    let msg = format!("{} has joined the chat", username);
-    let sender_msg = format!("Welcome to the chat {}!", username);
-    println!("{}", msg.trim());
-    state_lock.broadcast(peer_addr, &msg, &sender_msg).await;
+    let msg = Message {
+        text: format!("{} has joined the chat", username),
+        msg_type: MessageType::SystemInfo,
+        author: String::from(SYSTEM_USRNAME),
+    };
+    let sender_msg = Message {
+        text: format!("Welcome to the chat {}!", username),
+        msg_type: MessageType::SystemInfo,
+        author: String::from(SYSTEM_USRNAME),
+    };
+    println!("{}", msg);
+    state_lock.broadcast(peer_addr, &msg, &sender_msg, &mut peer.codec).await;
     std::mem::drop(state_lock);
 
 
     loop {
         tokio::select! {
-            Some(msg) = peer.reciever.recv() => {
-                peer.lines.send(&msg).await?;
-            }
-            result = peer.lines.next() => match result {
-                // A message was received from the current user, we should
-                // broadcast this message to the other users.
-                Some(Ok(msg)) => {
-                    let mut state_lock = state.lock().await;
-                    let msg = format!("{}: {}", username, msg);
-                    println!("{}", msg);
-                    state_lock.broadcast(peer_addr, &msg, &msg).await;
-                    std::mem::drop(state_lock);
+            Some(deser_msg) = peer.reciever.recv() => {
+                let mut message : Message = deser_msg.into();
+                peer.codec.send_message(&message).await;
+            },
+            result = peer.codec.next() => match result {
+                Some(Ok(deser_msg)) => {
+                    if deser_msg.len() > 0 {
+                        let mut state_lock = state.lock().await;
+                        let mut msg : Message = deser_msg.into();
+                        println!("{}", msg);
+                        state_lock.broadcast(peer_addr, &msg, &msg, &mut peer.codec).await;
+                        std::mem::drop(state_lock);
+                    }
                 }
                 // An error occurred.
                 Some(Err(e)) => {
@@ -96,8 +108,16 @@ async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, peer_addr: Socket
     // Disconnect user and notify other users
     let mut state_lock = state.lock().await;
     state_lock.peers.remove(&user);
-    let msg = format!("{} has left the chat", username);
-    let exit_msg = format!("You have left the chat");
+    let msg = Message {
+        text: format!("{} has left the chat", username),
+        msg_type: MessageType::SystemInfo,
+        author: String::from(SYSTEM_USRNAME),
+    };
+    let exit_msg = Message {
+        text: format!("You have left the chat"),
+        msg_type: MessageType::SystemInfo,
+        author: String::from(SYSTEM_USRNAME),
+    };
     println!("{}", msg);
     
     
@@ -118,19 +138,27 @@ async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, peer_addr: Socket
     println!("Cleaned up {} empty chatroom(s)", chats_to_remove.len());
     
 
-    state_lock.broadcast(peer_addr, &msg, &exit_msg).await;
+    state_lock.broadcast(peer_addr, &msg, &exit_msg, &mut peer.codec).await;
     std::mem::drop(state_lock);
     Ok(())
 }
 
 
 async fn request_user_input(
-    input_message: &str, lines: &mut Framed<TcpStream, LinesCodec>,
+    input_message: &str, codec: &mut Codec,
     into: &mut String)  -> Result<(), Box<dyn Error>> 
     {
-    lines.send(input_message.trim()).await?;
-    match lines.next().await {
-        Some(Ok(line)) => *into = join_strings(into.to_string(), line),
+    let msg = Message {
+        text: String::from(input_message),
+        msg_type: MessageType::SystemInfo,
+        author: String::from(SYSTEM_USRNAME),
+    };
+    codec.send_message(&msg).await;
+    match codec.next().await {
+        Some(Ok(line)) => {
+            let msg : Message = line.into();
+            *into = join_strings(into.to_string(), msg.text)
+        },
         // We didn't get a line so we return early here.
         _ => {
             eprintln!("Error while getting user input");

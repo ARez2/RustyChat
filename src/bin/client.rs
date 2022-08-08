@@ -21,12 +21,12 @@ use tui::{
     Frame, Terminal,
 };
 
-use networking::{DEFAULT_ADDR};
+use networking::{DEFAULT_ADDR, Message, MessageType, UserSetupType};
 
 
 struct App {
     input: String,
-    messages: VecDeque<String>,
+    messages: VecDeque<Message>,
 }
 
 impl Default for App {
@@ -38,11 +38,24 @@ impl Default for App {
     }
 }
 
+struct UserSetup {
+    username: String,
+}
+
+impl UserSetup {
+    fn new() -> UserSetup {
+        UserSetup {
+            username: String::from("Anon"),
+        }
+    }
+}
 
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let mut user_setup = UserSetup::new();
     let stream = TcpStream::connect(DEFAULT_ADDR.to_string()).await?;
+    
     let split = stream.into_split();
     let reader = BufReader::new(split.0);
     let writer = BufWriter::new(split.1);
@@ -51,7 +64,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 
     let ui_handle = tokio::spawn(async move {
-        handle_ui(incoming_reciever, writer).await
+        handle_ui(incoming_reciever, writer, &mut user_setup).await
     });
 
     let poll_incoming_handle = tokio::spawn (async {
@@ -66,14 +79,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 
-async fn poll(mut reader: BufReader<OwnedReadHalf>, tx: Sender<String>) -> Result<(), &'static str> {
+async fn poll(mut reader: BufReader<OwnedReadHalf>, tx: Sender<Message>) -> Result<(), &'static str> {
     loop {
         let mut line = String::new();
         let poller = reader.read_line(&mut line);
         pin_mut!(poller);
         if let Ok(_) = tokio::time::timeout(Duration::from_micros(10), &mut poller).await {
             if line.len() > 0 {
-                tx.send(String::from(line.trim()).clone()).await.unwrap();
+                let deser_msg: Message = serde_json::from_str(line.trim()).unwrap();
+                tx.send(deser_msg).await.unwrap();
             };
         };
     }
@@ -81,7 +95,7 @@ async fn poll(mut reader: BufReader<OwnedReadHalf>, tx: Sender<String>) -> Resul
 }
 
 
-async fn handle_ui(mut incoming_reciever: Receiver<String>, mut writer: BufWriter<OwnedWriteHalf>) {
+async fn handle_ui(mut incoming_reciever: Receiver<Message>, mut writer: BufWriter<OwnedWriteHalf>, setup: &mut UserSetup) {
     // setup terminal
     enable_raw_mode().unwrap();
     let mut stdout = io::stdout();
@@ -113,12 +127,18 @@ async fn handle_ui(mut incoming_reciever: Receiver<String>, mut writer: BufWrite
                     },
                     KeyCode::Backspace => {app.input.pop();},
                     KeyCode::Enter => {
-
                         if app.input == "/exit" {
                             break;
                         };
                         if app.input.len() > 0 {
-                            writer.write(&app.input.as_bytes()).await.unwrap();
+                            let msg = Message {
+                                text: app.input.clone(),
+                                msg_type: MessageType::User,
+                                author: setup.username.clone(),
+                            };
+                            app.messages.push_back(msg.clone());
+                            let deser : String = msg.into();
+                            writer.write(&deser.as_bytes()).await.unwrap();
                             writer.write(&['\n' as u8]).await.unwrap();
                             writer.flush().await.unwrap();
                             app.input.clear();
@@ -134,7 +154,16 @@ async fn handle_ui(mut incoming_reciever: Receiver<String>, mut writer: BufWrite
         pin_mut!(recv_incoming);
         if let Ok(x) = tokio::time::timeout(Duration::from_micros(wait_time), &mut recv_incoming).await {
             if let Some(incoming_msg) = x {
-                app.messages.push_back(incoming_msg);
+                if incoming_msg.author != setup.username {
+                    match incoming_msg.msg_type {
+                        MessageType::UserSetup(UserSetupType::UsernameConfirmed) => {
+                            setup.username = incoming_msg.text.clone();
+                        },
+                        _ => {
+                            app.messages.push_back(incoming_msg);
+                        }
+                    };
+                };
                 if app.messages.len() > 10 {
                     app.messages.pop_front();
                 };
@@ -192,8 +221,15 @@ fn draw_ui<B: Backend>(app: &App, f: &mut Frame<B>) {
     .messages
     .iter()
     .enumerate()
-    .map(|(i, m)| {
-        let content = vec![Spans::from(Span::raw(format!("{}", m)))];
+    .map(|(i, msg)| {
+        let mut style = Style::default();
+        match msg.msg_type {
+            MessageType::SystemInfo => style = style.fg(Color::Red),
+            MessageType::User => (),
+            _ => (),
+        };
+        let span = Span::styled(format!("{}", msg), style);
+        let content = vec![Spans::from(span)];
         ListItem::new(content)
     })
     .collect();

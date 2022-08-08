@@ -16,6 +16,9 @@ tracing-subscriber = { version = "0.3.1", default-features = false, features = [
 futures = { version = "0.3.0", features = ["thread-pool"]}
 tui = "0.18.0"
 crossterm = "0.24.0"
+serde_json = "1.0.83"
+serde = "1.0.142"
+serde_derive = "1.0.142"
 
 [[example]]
 name = "server"
