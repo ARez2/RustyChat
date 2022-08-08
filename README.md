@@ -1,4 +1,5 @@
 # RustyChat
+![Preview img](/repository/img/preview.png?raw=true "A little preview")
 
 ## Disclaimer
 I am very new to Rust. This project is meant as a learning experience.
