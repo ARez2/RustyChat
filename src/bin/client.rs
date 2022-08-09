@@ -62,12 +62,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let (incoming_sender, incoming_reciever) = mpsc::channel(32);
 
-
+    // Spawn the thread that handles the (T)UI and reads user input
     let ui_handle = tokio::spawn(async move {
         handle_ui(incoming_reciever, writer, &mut user_setup).await
     });
 
-    let poll_incoming_handle = tokio::spawn (async {
+    // Spawn the thread that reads the TcpStream for incoming messages (from the server/ other users)
+    let _poll_incoming_handle = tokio::spawn (async {
         let res = poll(reader, incoming_sender).await;
         res
     });
@@ -119,10 +120,8 @@ async fn handle_ui(mut incoming_reciever: Receiver<Message>, mut writer: BufWrit
         if crossterm::event::poll(Duration::from_micros(0)).unwrap()
         {
             if let Event::Key(key) = event::read().unwrap() {
-                //tx.send(outp.clone()).await.unwrap();
                 match key.code {
                     KeyCode::Char(c) => {
-                        //tx.send(outp.clone()).await.unwrap();
                         app.input.push(c);
                     },
                     KeyCode::Backspace => {app.input.pop();},
@@ -146,7 +145,7 @@ async fn handle_ui(mut incoming_reciever: Receiver<Message>, mut writer: BufWrit
                             writer.flush().await.unwrap();
                             app.input.clear();
                         };
-                    }
+                    },
                     _ => (),
                 };
             };

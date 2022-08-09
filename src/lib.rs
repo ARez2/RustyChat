@@ -15,6 +15,16 @@ pub type Transmitter = mpsc::UnboundedSender<String>;
 pub type Reciever = mpsc::UnboundedReceiver<String>;
 
 
+/// Utility function to join the contents of 2 Strings together
+pub fn join_strings(str1: String, str2: String) -> String {
+    String::from(format!("{}{}", str1.as_str(), str2.as_str()))
+}
+
+
+
+
+/// Represents a single chat room instance on the server
+/// Might hold chat name/ description, mods etc. later
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Chat {
     pub members: Vec<SocketAddr>,
@@ -22,12 +32,16 @@ pub struct Chat {
 
 
 
+/// A single User object
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub struct User {
     pub addr: SocketAddr,
     pub usrname: String,
 }
 
+
+
+/// Data that is shared between each user
 pub struct Shared {
     pub peers: HashMap<User, Transmitter>,
     pub chats: Vec<Chat>,
@@ -41,6 +55,7 @@ impl Shared {
         }
     }
 
+
     pub fn get_usr_from_addr(&self, addr: SocketAddr) -> Option<&User> {
         let mut user = None;
         for p in self.peers.iter() {
@@ -51,6 +66,7 @@ impl Shared {
         };
         user
     }
+
 
     pub fn get_usr_from_name(&self, name: String) -> Option<&User> {
         let mut user = None;
@@ -63,7 +79,8 @@ impl Shared {
         user
     }
 
-
+    /// Sends the message to all users present in the chat
+    /// Can send a custom sender message to current client
     pub async fn broadcast(&mut self, sender: SocketAddr, message: &Message, custom_sender_msg: &Message, codec: &mut Codec) {
         let user_chats = self.get_chats_from_user_addr(sender).clone();
         for chat in user_chats {
@@ -91,6 +108,8 @@ impl Shared {
 
     }
 
+
+    /// Joins the chat based on another users username
     pub fn join_chat(&mut self, joining_user: &User, joined_user: &String) {
         let other_user = self.get_usr_from_name(joined_user.clone());
         match other_user {
@@ -147,10 +166,6 @@ impl Shared {
 
 
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
-pub enum UserSetupType {
-    UsernameConfirmed,
-}
 
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
@@ -161,7 +176,16 @@ pub enum MessageType {
     Command,
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+pub enum UserSetupType {
+    UsernameConfirmed,
+}
 
+
+
+/// Represents a message that gets serialized and deserialized when being sent.
+/// The into implementations use serde (serde_json) to (de-)serialized the message
+/// into a string
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
     pub text: String,
@@ -200,6 +224,10 @@ impl Into<Message> for String {
     }
 }
 
+
+
+/// A wrapper around the provided Frame by tokio. It helps providing a single way
+/// on how to send a message to the client
 pub struct Codec {
     lines: Framed<TcpStream, LinesCodec>,
 }
@@ -222,6 +250,9 @@ impl Codec {
 }
 
 
+/// A single peer that is connected to the server.
+/// I split Peer and User so that i can separately clone the User struct
+/// as i cannot clone a peer because of its fields
 pub struct Peer {
     pub codec: Codec,
     pub reciever: Reciever,

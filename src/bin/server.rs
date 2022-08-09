@@ -1,4 +1,3 @@
-use futures::lock::MutexLockFuture;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, MutexGuard};
 
@@ -6,7 +5,7 @@ use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use rusty_chat::{Shared, Peer, User, DEFAULT_ADDR, Chat, Codec, Message, MessageType, UserSetupType};
+use rusty_chat::{Shared, Peer, User, DEFAULT_ADDR, Chat, Codec, Message, MessageType, UserSetupType, join_strings};
 
 const SYSTEM_USRNAME : &str= "SYSTEM";
 
@@ -31,7 +30,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 }
 
-
+/// Processes the current client (represented by a TcpStream)
 async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, peer_addr: SocketAddr,) 
     -> Result<(), Box<dyn Error>> 
 {
@@ -39,6 +38,7 @@ async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, peer_addr: Socket
 
     let mut username = String::new();
     request_user_input("Please enter your username:", &mut codec, &mut username).await?;
+    // TODO: Check if username is taken and only then send the confirmation
     codec.send_message(&Message {
         text: username.clone(),
         msg_type: MessageType::UserSetup(UserSetupType::UsernameConfirmed),
@@ -50,9 +50,10 @@ async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, peer_addr: Socket
         usrname: username.clone(),
     };
 
-    // Register our peer with state which internally sets up some channels.
     let mut peer = Peer::new(state.clone(), codec, &user).await?;
 
+    // We might need for a command to get processed etc.
+    // Probably not the best way to do it, but i cant think of anything better
     let mut has_task = false;
     loop {
         if has_task {
@@ -66,27 +67,29 @@ async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, peer_addr: Socket
             result = peer.codec.next() => match result {
                 Some(Ok(deser_msg)) => {
                     if deser_msg.len() > 0 {
+                        // Reconstruct the Message struct from the String
                         let msg : Message = deser_msg.into();
+                        // Handle the command if the message is a command
                         if msg.msg_type == MessageType::Command && msg.text.starts_with("/") {
                             has_task = true;
                             handle_command(state.clone(), &msg.text, &user, &mut peer, &username).await;
                             has_task = false;
+                        } else {
+                            println!("{}", msg);
+                            let mut state_lock = state.lock().await;
+                            state_lock.broadcast(peer_addr, &msg, &msg, &mut peer.codec).await;
+                            std::mem::drop(state_lock);
                         };
-                        println!("{}", msg);
-                        let mut state_lock = state.lock().await;
-                        state_lock.broadcast(peer_addr, &msg, &msg, &mut peer.codec).await;
-                        std::mem::drop(state_lock);
                     }
                 }
                 // An error occurred.
                 Some(Err(e)) => {
-                    // eprintln!(
-                    //     "an error occurred while processing messages for {}; error = {:?}",
-                    //     username,
-                    //     e
-                    // );
+                    eprintln!(
+                        "an error occurred while processing messages for {}; error = {:?}",
+                        username,
+                        e
+                    );
                 }
-                // The stream has been exhausted.
                 None => break,
             },
         }
@@ -131,6 +134,7 @@ async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, peer_addr: Socket
 }
 
 
+/// Sends a prompt to the current client and reads their input into the provided String argument
 async fn request_user_input(
     input_message: &str, codec: &mut Codec,
     into: &mut String)  -> Result<(), Box<dyn Error>> 
@@ -155,12 +159,12 @@ async fn request_user_input(
     Ok(())
 }
 
-fn join_strings(str1: String, str2: String) -> String {
-    String::from(format!("{}{}", str1.as_str(), str2.as_str()))
-}
 
 
 
+
+/// General purpose command handling function
+/// Might need to have separate functions for each command later
 async fn handle_command(state: Arc<Mutex<Shared>>, input: &String, user: &User, peer: &mut Peer, username: &String) {
     let mut state_lock : MutexGuard<Shared> = state.lock().await;
     
