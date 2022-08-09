@@ -1,5 +1,6 @@
+use futures::lock::MutexLockFuture;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex};
+use tokio::sync::{Mutex, MutexGuard};
 
 use std::error::Error;
 use std::net::SocketAddr;
@@ -44,9 +45,6 @@ async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, peer_addr: Socket
         author: String::from(SYSTEM_USRNAME),
     }).await;
     
-    let mut friend_username = String::new();
-    request_user_input("Please enter your friends name:", &mut codec, &mut friend_username).await?;
-    
     let user = User {
         addr: peer_addr,
         usrname: username.clone(),
@@ -54,39 +52,28 @@ async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, peer_addr: Socket
 
     // Register our peer with state which internally sets up some channels.
     let mut peer = Peer::new(state.clone(), codec, &user).await?;
-    
-    let mut new_state = state.lock().await;
-    new_state.join_chat(&user, &friend_username);
-    std::mem::drop(new_state);
-    
-    let mut state_lock = state.lock().await;
-    let msg = Message {
-        text: format!("{} has joined the chat", username),
-        msg_type: MessageType::SystemInfo,
-        author: String::from(SYSTEM_USRNAME),
-    };
-    let sender_msg = Message {
-        text: format!("Welcome to the chat {}!", username),
-        msg_type: MessageType::SystemInfo,
-        author: String::from(SYSTEM_USRNAME),
-    };
-    println!("{}", msg);
-    state_lock.broadcast(peer_addr, &msg, &sender_msg, &mut peer.codec).await;
-    std::mem::drop(state_lock);
 
-
+    let mut has_task = false;
     loop {
+        if has_task {
+            continue;
+        };
         tokio::select! {
             Some(deser_msg) = peer.reciever.recv() => {
-                let mut message : Message = deser_msg.into();
+                let message : Message = deser_msg.into();
                 peer.codec.send_message(&message).await;
             },
             result = peer.codec.next() => match result {
                 Some(Ok(deser_msg)) => {
                     if deser_msg.len() > 0 {
-                        let mut state_lock = state.lock().await;
-                        let mut msg : Message = deser_msg.into();
+                        let msg : Message = deser_msg.into();
+                        if msg.msg_type == MessageType::Command && msg.text.starts_with("/") {
+                            has_task = true;
+                            handle_command(state.clone(), &msg.text, &user, &mut peer, &username).await;
+                            has_task = false;
+                        };
                         println!("{}", msg);
+                        let mut state_lock = state.lock().await;
                         state_lock.broadcast(peer_addr, &msg, &msg, &mut peer.codec).await;
                         std::mem::drop(state_lock);
                     }
@@ -106,7 +93,7 @@ async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, peer_addr: Socket
     }
 
     // Disconnect user and notify other users
-    let mut state_lock = state.lock().await;
+    let mut state_lock : MutexGuard<Shared> = state.lock().await;
     state_lock.peers.remove(&user);
     let msg = Message {
         text: format!("{} has left the chat", username),
@@ -170,4 +157,38 @@ async fn request_user_input(
 
 fn join_strings(str1: String, str2: String) -> String {
     String::from(format!("{}{}", str1.as_str(), str2.as_str()))
+}
+
+
+
+async fn handle_command(state: Arc<Mutex<Shared>>, input: &String, user: &User, peer: &mut Peer, username: &String) {
+    let mut state_lock : MutexGuard<Shared> = state.lock().await;
+    
+    let full_cmd_input = input.clone().replace("/", "");
+    let cmd_res = full_cmd_input.split(" ");
+    let mut args = cmd_res.into_iter();
+    let cmd = args.next().unwrap();
+    match cmd {
+        "join" => {
+            let friend_username = String::from(args.next().unwrap());
+            state_lock.join_chat(user, &friend_username);
+            //std::mem::drop(new_state);
+            println!("Joining...");
+            
+            let msg = Message {
+                text: format!("{} has joined the chat", username),
+                msg_type: MessageType::SystemInfo,
+                author: String::from(SYSTEM_USRNAME),
+            };
+            let sender_msg = Message {
+                text: format!("Welcome to the chat {}!", username),
+                msg_type: MessageType::SystemInfo,
+                author: String::from(SYSTEM_USRNAME),
+            };
+            println!("{}", msg);
+            state_lock.broadcast(user.addr, &msg, &sender_msg, &mut peer.codec).await;
+        },
+        _ => (),
+    };
+    std::mem::drop(state_lock);
 }

@@ -3,6 +3,7 @@ use std::{collections::HashMap, net::SocketAddr};
 use std::sync::Arc;
 use futures::SinkExt;
 use serde_derive::{Serialize, Deserialize};
+use tokio::sync::MutexGuard;
 use tokio::{sync::{mpsc, Mutex}, net::TcpStream};
 use tokio_stream::StreamExt;
 use tokio_util::codec::{Framed, LinesCodec};
@@ -233,7 +234,7 @@ impl Peer {
         user: &User,
     ) -> io::Result<Peer> {
         let (transmitter, reciever) = mpsc::unbounded_channel();
-        let mut guard = state.lock().await;
+        let mut guard : MutexGuard<Shared> = state.lock().await;
         guard.peers.insert(user.clone(), transmitter);
         std::mem::drop(guard);
 

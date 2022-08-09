@@ -131,10 +131,13 @@ async fn handle_ui(mut incoming_reciever: Receiver<Message>, mut writer: BufWrit
                             break;
                         };
                         if app.input.len() > 0 {
-                            let msg = Message {
+                            let mut msg = Message {
                                 text: app.input.clone(),
                                 msg_type: MessageType::User,
                                 author: setup.username.clone(),
+                            };
+                            if app.input.starts_with("/") {
+                                msg.msg_type = MessageType::Command;
                             };
                             app.messages.push_back(msg.clone());
                             let deser : String = msg.into();
@@ -207,7 +210,7 @@ fn draw_ui<B: Backend>(app: &App, f: &mut Frame<B>) {
         .split(f.size());
     
     let msg = vec![
-        Span::styled("Chat", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled("RustyChat", Style::default().add_modifier(Modifier::BOLD)),
     ];
     let style = Style::default();
     
