@@ -5,7 +5,15 @@ use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use rusty_chat::{Shared, Peer, User, DEFAULT_ADDR, Chat, Codec, Message, MessageType, UserSetupType, join_strings};
+use rusty_chat::{
+    DEFAULT_ADDR,
+    join_strings,
+    shared::{Shared, Chat},
+    peer::{Peer, User},
+    codec::Codec,
+    message::Message,
+    types::{MessageType, UserSetupType},
+};
 
 const SYSTEM_USRNAME : &str= "SYSTEM";
 
@@ -176,8 +184,6 @@ async fn handle_command(state: Arc<Mutex<Shared>>, input: &String, user: &User, 
         "join" => {
             let friend_username = String::from(args.next().unwrap());
             state_lock.join_chat(user, &friend_username);
-            //std::mem::drop(new_state);
-            println!("Joining...");
             
             let msg = Message {
                 text: format!("{} has joined the chat", username),
