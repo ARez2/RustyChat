@@ -60,6 +60,13 @@ async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, peer_addr: Socket
 
     let mut peer = Peer::new(state.clone(), codec, &user).await?;
 
+    let help_message = Message {
+        text: String::from("Type /join <username> to join the chat of someone or create a new chat. Type /exit to quit."),
+        msg_type: MessageType::SystemInfo,
+        author: String::from(SYSTEM_USRNAME),
+    };
+    peer.codec.send_message(&help_message).await;
+
     // We might need for a command to get processed etc.
     // Probably not the best way to do it, but i cant think of anything better
     let mut has_task = false;
